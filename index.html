@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Explore SpeedCoach CSV files on an interactive map with linked stroke-by-stroke charts and anomaly detection.">
+  <title>SpeedCoach Race Lab</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2309181f'/%3E%3Cpath d='M9 38c11-12 21-12 32 0 5 5 9 5 14 0' fill='none' stroke='%233be0c0' stroke-width='6' stroke-linecap='round'/%3E%3Cpath d='M19 25h26' stroke='%23f7c65d' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://unpkg.com">
+  <link rel="preconnect" href="https://tile.openstreetmap.org">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #eaf4f4;
+      --muted: #8fa8ad;
+      --bg: #071319;
+      --surface: #0b1d24;
+      --surface-2: #102932;
+      --border: #25424a;
+      --aqua: #3be0c0;
+      --yellow: #f7c65d;
+      --red: #ff6b65;
+      --blue: #4ca7ff;
+      --shadow: 0 18px 50px rgba(0,0,0,.24);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; background: var(--bg); color: var(--ink); font-size: 16px; }
+    button, input, select { font: inherit; }
+    button, .file-label, select, input[type="range"] { min-height: 42px; }
+    button, .file-label, select {
+      border: 1px solid var(--border); border-radius: 10px; color: var(--ink); background: var(--surface-2);
+    }
+    button, .file-label { cursor: pointer; padding: .65rem .9rem; font-weight: 650; }
+    button:hover, .file-label:hover { border-color: var(--aqua); }
+    button:focus-visible, .file-label:focus-within, select:focus-visible, input:focus-visible { outline: 3px solid rgba(59,224,192,.3); outline-offset: 2px; }
+    .primary { background: var(--aqua); color: #05221d; border-color: var(--aqua); }
+    .ghost { background: transparent; }
+    .shell { min-height: 100vh; display: grid; grid-template-rows: auto 1fr; }
+    header {
+      display: flex; align-items: center; gap: 1rem; padding: .9rem 1.15rem; border-bottom: 1px solid var(--border);
+      background: rgba(7,19,25,.95); position: sticky; top: 0; z-index: 900;
+    }
+    .brand { display: flex; align-items: center; gap: .7rem; min-width: max-content; }
+    .mark { width: 34px; height: 34px; border-radius: 9px; background: var(--surface-2); display: grid; place-items: center; color: var(--aqua); font-weight: 900; letter-spacing: -.08em; }
+    h1 { font-size: 1.05rem; margin: 0; letter-spacing: -.02em; }
+    .upload-row { display: flex; align-items: center; gap: .55rem; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
+    .file-label input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+    .privacy { color: var(--muted); font-size: .78rem; }
+    main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; min-height: 0; }
+    .map-column { min-width: 0; display: grid; grid-template-rows: minmax(480px, 64vh) auto; border-right: 1px solid var(--border); }
+    .map-wrap { position: relative; min-height: 480px; }
+    #map { position: absolute; inset: 0; background: #0b1d24; }
+    .map-controls {
+      position: absolute; z-index: 600; left: 1rem; top: 1rem; display: flex; gap: .55rem; flex-wrap: wrap;
+      padding: .55rem; border-radius: 12px; background: rgba(7,19,25,.9); box-shadow: var(--shadow); backdrop-filter: blur(10px);
+    }
+    .field { display: grid; gap: .25rem; }
+    .field label { color: var(--muted); font-size: .74rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+    select { padding: .45rem 2rem .45rem .7rem; }
+    .legend {
+      position: absolute; z-index: 600; left: 1rem; bottom: 1.25rem; width: min(290px, calc(100% - 2rem));
+      padding: .65rem .75rem; border-radius: 11px; background: rgba(7,19,25,.9); box-shadow: var(--shadow); backdrop-filter: blur(10px);
+    }
+    .legend-title { display: flex; justify-content: space-between; gap: 1rem; font-size: .82rem; }
+    .legend-title span:last-child { color: var(--muted); }
+    .gradient { height: 8px; margin: .45rem 0 .25rem; border-radius: 99px; background: linear-gradient(90deg,#2878b8,#2ec4b6,#f4d35e,#ee6c4d); }
+    .legend-scale { display: flex; justify-content: space-between; color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
+    .drop-state {
+      position: absolute; inset: 0; z-index: 650; display: grid; place-items: center; padding: 2rem;
+      background: rgba(7,19,25,.78); backdrop-filter: blur(6px); transition: opacity .2s ease;
+    }
+    .drop-state.hidden { opacity: 0; pointer-events: none; }
+    .empty-panel { max-width: 460px; text-align: center; }
+    .empty-panel h2 { font-size: clamp(1.65rem, 4vw, 2.7rem); line-height: 1.03; margin: 0 0 .75rem; letter-spacing: -.055em; }
+    .empty-panel p { color: var(--muted); margin: 0 0 1.2rem; line-height: 1.55; }
+    .drop-target { border: 1px dashed #4a7079; border-radius: 14px; padding: 1rem; margin-top: 1rem; color: var(--muted); }
+    .drop-target.dragging { border-color: var(--aqua); color: var(--ink); background: rgba(59,224,192,.08); }
+    .timeline { padding: 1rem 1.1rem 1.2rem; background: var(--surface); border-top: 1px solid var(--border); }
+    .timeline-head { display: flex; align-items: end; justify-content: space-between; gap: 1rem; margin-bottom: .65rem; }
+    .timeline h2 { margin: 0; font-size: .95rem; }
+    .selected-readout { color: var(--muted); font-size: .82rem; font-variant-numeric: tabular-nums; text-align: right; }
+    .chart-box { height: 190px; position: relative; }
+    .scrubber { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: .7rem; margin-top: .55rem; color: var(--muted); font-size: .78rem; }
+    .scrubber input { width: 100%; accent-color: var(--aqua); }
+    .sidebar { background: var(--surface); overflow: auto; max-height: calc(100vh - 64px); }
+    .panel { padding: 1rem; border-bottom: 1px solid var(--border); }
+    .panel h2 { margin: 0 0 .75rem; font-size: .9rem; letter-spacing: .01em; }
+    .session-name { font-size: 1.35rem; font-weight: 750; letter-spacing: -.04em; margin-bottom: .18rem; }
+    .session-meta { color: var(--muted); font-size: .82rem; }
+    .stats { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: .55rem; }
+    .stat { background: var(--surface-2); border: 1px solid var(--border); border-radius: 11px; padding: .7rem; min-width: 0; }
+    .stat-label { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; }
+    .stat-value { margin-top: .25rem; font-size: 1.2rem; font-weight: 760; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: .75rem 1rem; }
+    .detail dt { color: var(--muted); font-size: .72rem; }
+    .detail dd { margin: .12rem 0 0; font-weight: 680; font-variant-numeric: tabular-nums; }
+    .candidate-list { display: grid; gap: .45rem; }
+    .candidate { width: 100%; display: grid; grid-template-columns: auto 1fr auto; gap: .7rem; align-items: center; text-align: left; padding: .6rem .7rem; background: transparent; }
+    .candidate-rank { width: 25px; height: 25px; border-radius: 50%; display: grid; place-items: center; background: rgba(255,107,101,.14); color: var(--red); font-size: .75rem; }
+    .candidate strong { display: block; font-size: .84rem; }
+    .candidate small { display: block; color: var(--muted); margin-top: .15rem; }
+    .candidate-score { font-variant-numeric: tabular-nums; color: var(--yellow); font-size: .8rem; }
+    .table-wrap { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; font-size: .78rem; font-variant-numeric: tabular-nums; }
+    th, td { padding: .45rem .3rem; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+    th:first-child, td:first-child { text-align: left; }
+    tr.selected { background: rgba(59,224,192,.08); color: var(--aqua); }
+    .status { padding: .8rem 1rem; color: var(--muted); font-size: .82rem; }
+    .error { color: #ff9c97; }
+    .leaflet-control-attribution { background: rgba(7,19,25,.84)!important; color: var(--muted)!important; }
+    .leaflet-control-attribution a { color: var(--aqua)!important; }
+    .leaflet-control-zoom a { background: var(--surface)!important; color: var(--ink)!important; border-color: var(--border)!important; }
+    .leaflet-tooltip { background: var(--surface); color: var(--ink); border: 1px solid var(--border); box-shadow: var(--shadow); }
+    .leaflet-tooltip::before { border-top-color: var(--border)!important; }
+    @media (max-width: 980px) {
+      header { align-items: flex-start; }
+      .privacy { display: none; }
+      main { grid-template-columns: 1fr; }
+      .map-column { border-right: 0; }
+      .sidebar { max-height: none; display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); }
+      .sidebar .panel { border-right: 1px solid var(--border); }
+      .sidebar .panel:first-child, .sidebar .panel:last-child { grid-column: 1 / -1; }
+    }
+    @media (max-width: 650px) {
+      header { position: static; flex-direction: column; }
+      .upload-row { margin-left: 0; width: 100%; justify-content: stretch; }
+      .upload-row .file-label { width: 100%; text-align: center; }
+      .map-column { grid-template-rows: minmax(470px, 66vh) auto; }
+      .map-controls { right: .7rem; left: .7rem; top: .7rem; display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
+      .map-controls .field select { width: 100%; }
+      .map-controls #fitBtn { grid-column: 1 / -1; width: 100%; }
+      .legend { left: .7rem; bottom: .7rem; }
+      .sidebar { display: block; }
+      .timeline-head { align-items: start; flex-direction: column; }
+      .selected-readout { text-align: left; }
+    }
+    @media (max-width: 390px) {
+      header { padding: .8rem; }
+      .map-wrap { min-height: 520px; }
+      .map-column { grid-template-rows: 520px auto; }
+      .map-controls { grid-template-columns: 1fr; }
+      .map-controls #fitBtn { grid-column: 1; }
+      .legend { bottom: .6rem; }
+      .timeline { padding-inline: .8rem; }
+      .chart-box { height: 220px; }
+      .panel { padding-inline: .8rem; }
+      .stats { gap: .4rem; }
+      .stat { padding: .6rem; }
+      .stat-value { font-size: 1.05rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div class="brand"><div class="mark" aria-hidden="true">S</div><h1>SpeedCoach Race Lab</h1></div>
+      <div class="upload-row">
+        <span class="privacy">Analysis stays in your browser</span>
+        <label class="file-label primary">Choose CSV<input id="fileInput" type="file" accept=".csv,text/csv"></label>
+      </div>
+    </header>
+
+    <main>
+      <section class="map-column" aria-label="Race map and timeline">
+        <div class="map-wrap">
+          <div id="map" aria-label="Interactive GPS route map"></div>
+          <div class="map-controls">
+            <div class="field"><label for="colorMode">Color route by</label><select id="colorMode" disabled>
+              <option value="speed">Speed</option><option value="split">Split / 500 m</option><option value="dps">Meters per stroke</option>
+              <option value="rate">Stroke rate</option><option value="turn">Steering change</option><option value="anomaly">Anomaly score</option>
+            </select></div>
+            <div class="field"><label for="chartMetric">Chart focus</label><select id="chartMetric" disabled>
+              <option value="speed">Speed + rate</option><option value="split">Split + rate</option><option value="dps">Meters/stroke + rate</option><option value="turn">Steering + speed</option>
+            </select></div>
+            <button id="fitBtn" class="ghost" type="button" disabled>Fit route</button>
+          </div>
+          <div class="legend" id="legend" hidden><div class="legend-title"><strong id="legendLabel">Speed</strong><span id="legendUnit">m/s</span></div><div class="gradient"></div><div class="legend-scale"><span id="legendMin">0</span><span id="legendMid">0</span><span id="legendMax">0</span></div></div>
+          <div class="drop-state" id="emptyState">
+            <div class="empty-panel">
+              <h2>Put every stroke back on the water.</h2>
+              <p>Upload a SpeedCoach CSV to inspect pace, rate, meters per stroke, steering changes, and likely incident points along the GPS route.</p>
+              <label class="file-label primary">Choose a SpeedCoach CSV<input id="emptyFileInput" type="file" accept=".csv,text/csv"></label>
+              <div class="drop-target" id="dropTarget">or drop the CSV anywhere on this page</div>
+            </div>
+          </div>
+        </div>
+        <div class="timeline">
+          <div class="timeline-head"><h2 id="chartTitle">Stroke timeline</h2><div class="selected-readout" id="selectedReadout">Choose a CSV to begin</div></div>
+          <div class="chart-box"><canvas id="chart"></canvas></div>
+          <div class="scrubber"><span>Start</span><input id="strokeSlider" type="range" min="0" max="0" value="0" disabled aria-label="Selected stroke"><span>Finish</span></div>
+        </div>
+      </section>
+
+      <aside class="sidebar" aria-label="Race statistics">
+        <section class="panel"><div class="session-name" id="sessionName">No session loaded</div><div class="session-meta" id="sessionMeta">Upload a SpeedCoach export to start.</div></section>
+        <section class="panel"><h2>Session</h2><div class="stats">
+          <div class="stat"><div class="stat-label">Distance</div><div class="stat-value" id="statDistance">—</div></div>
+          <div class="stat"><div class="stat-label">Elapsed</div><div class="stat-value" id="statElapsed">—</div></div>
+          <div class="stat"><div class="stat-label">Average split</div><div class="stat-value" id="statSplit">—</div></div>
+          <div class="stat"><div class="stat-label">Average rate</div><div class="stat-value" id="statRate">—</div></div>
+        </div></section>
+        <section class="panel"><h2>Selected stroke</h2><dl class="detail-grid">
+          <div class="detail"><dt>Stroke</dt><dd id="dStroke">—</dd></div><div class="detail"><dt>Distance</dt><dd id="dDistance">—</dd></div>
+          <div class="detail"><dt>Elapsed</dt><dd id="dElapsed">—</dd></div><div class="detail"><dt>Split / 500 m</dt><dd id="dSplit">—</dd></div>
+          <div class="detail"><dt>Speed</dt><dd id="dSpeed">—</dd></div><div class="detail"><dt>Stroke rate</dt><dd id="dRate">—</dd></div>
+          <div class="detail"><dt>Meters / stroke</dt><dd id="dDps">—</dd></div><div class="detail"><dt>Heading change</dt><dd id="dTurn">—</dd></div>
+        </dl></section>
+        <section class="panel"><h2>Incident candidates</h2><div class="candidate-list" id="candidateList"><div class="status">Candidates combine sudden speed loss, shorter strokes, steering change, and timing gaps. They are clues, not proof of equipment failure.</div></div></section>
+        <section class="panel"><h2>Nearby strokes</h2><div class="table-wrap"><table><thead><tr><th>Stroke</th><th>Dist.</th><th>Split</th><th>Rate</th><th>m/stroke</th></tr></thead><tbody id="nearbyRows"><tr><td colspan="5">—</td></tr></tbody></table></div></section>
+        <div id="status" class="status" role="status" aria-live="polite">Ready for a SpeedCoach CSV.</div>
+      </aside>
+    </main>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script>
+  (() => {
+    'use strict';
+    const state = { rows: [], meta: {}, summary: {}, selected: 0, routeLayers: [], candidates: [], bounds: null, chart: null, marker: null };
+    const $ = id => document.getElementById(id);
+    const map = L.map('map', { zoomControl: true, preferCanvas: true, attributionControl: true }).setView([42.2678, -71.7538], 13);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(map);
+    const routeGroup = L.layerGroup().addTo(map);
+    const markerIcon = L.divIcon({ className: '', html: '<div style="width:16px;height:16px;border:3px solid #fff;border-radius:50%;background:#071319;box-shadow:0 0 0 4px #3be0c0,0 4px 16px #0008"></div>', iconSize:[16,16], iconAnchor:[8,8] });
+
+    const metricDefs = {
+      speed: { label:'Speed', unit:'m/s', value:r=>r.speed, format:v=>v.toFixed(2), reverse:false },
+      split: { label:'Split / 500 m', unit:'min:sec', value:r=>r.split, format:formatSplit, reverse:true },
+      dps: { label:'Meters per stroke', unit:'m', value:r=>r.dps, format:v=>v.toFixed(1), reverse:false },
+      rate: { label:'Stroke rate', unit:'spm', value:r=>r.rate, format:v=>v.toFixed(1), reverse:false },
+      turn: { label:'Steering change', unit:'° / stroke', value:r=>Math.abs(r.turn || 0), format:v=>v.toFixed(1), reverse:false },
+      anomaly: { label:'Anomaly score', unit:'relative', value:r=>r.anomaly || 0, format:v=>v.toFixed(1), reverse:false }
+    };
+
+    function parseCSV(text) {
+      const table = []; let row = [], cell = '', quoted = false;
+      for (let i=0; i<text.length; i++) {
+        const c = text[i];
+        if (quoted) {
+          if (c === '"' && text[i+1] === '"') { cell += '"'; i++; }
+          else if (c === '"') quoted = false;
+          else cell += c;
+        } else if (c === '"') quoted = true;
+        else if (c === ',') { row.push(cell); cell = ''; }
+        else if (c === '\n') { row.push(cell.replace(/\r$/, '')); table.push(row); row = []; cell = ''; }
+        else cell += c;
+      }
+      if (cell.length || row.length) { row.push(cell.replace(/\r$/, '')); table.push(row); }
+      return table;
+    }
+
+    function elapsed(value) {
+      const p = String(value || '').split(':').map(Number);
+      return p.length === 3 && p.every(Number.isFinite) ? p[0]*3600 + p[1]*60 + p[2] : NaN;
+    }
+    function number(v) { const n = Number(v); return Number.isFinite(n) ? n : NaN; }
+    function bearing(a,b) {
+      const r=Math.PI/180, p1=a.lat*r, p2=b.lat*r, dl=(b.lon-a.lon)*r;
+      return (Math.atan2(Math.sin(dl)*Math.cos(p2), Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl))/r+360)%360;
+    }
+    function angleDelta(a,b) { return ((b-a+540)%360)-180; }
+    function median(values) { const a=values.filter(Number.isFinite).sort((x,y)=>x-y); if(!a.length)return 0; const m=Math.floor(a.length/2); return a.length%2?a[m]:(a[m-1]+a[m])/2; }
+    function quantile(values,q) { const a=values.filter(Number.isFinite).sort((x,y)=>x-y); if(!a.length)return 0; const p=(a.length-1)*q, lo=Math.floor(p), hi=Math.ceil(p); return a[lo]+(a[hi]-a[lo])*(p-lo); }
+    function mean(values) { const a=values.filter(Number.isFinite); return a.length ? a.reduce((x,y)=>x+y,0)/a.length : 0; }
+    function movingMean(rows,key,i,radius=2) { return mean(rows.slice(Math.max(0,i-radius), i+radius+1).map(key)); }
+
+    function extract(text, filename) {
+      const table = parseCSV(text);
+      const marker = table.findIndex(r => String(r[0]).trim() === 'Per-Stroke Data:');
+      if (marker < 0) throw new Error('Per-Stroke Data section was not found. Choose a SpeedCoach CSV export.');
+      let headerIndex = marker + 1;
+      while (headerIndex < table.length && !table[headerIndex].some(v => String(v).trim())) headerIndex++;
+      const headers = table[headerIndex].map(v=>String(v).trim());
+      const idx = name => headers.indexOf(name);
+      const required = ['Distance (GPS)','Elapsed Time','Speed (GPS)','Stroke Rate','Distance/Stroke (GPS)','GPS Lat.','GPS Lon.'];
+      const missing = required.filter(x=>idx(x)<0);
+      if (missing.length) throw new Error('Missing SpeedCoach columns: ' + missing.join(', '));
+      const rows=[];
+      for(let i=headerIndex+1;i<table.length;i++){
+        const r=table[i];
+        if(!r.length || !String(r[idx('Elapsed Time')]||'').match(/^\d+:/)) continue;
+        const item={
+          stroke:number(r[idx('Total Strokes')]), distance:number(r[idx('Distance (GPS)')]), elapsed:elapsed(r[idx('Elapsed Time')]),
+          split:elapsed(r[idx('Split (GPS)')]), speed:number(r[idx('Speed (GPS)')]), rate:number(r[idx('Stroke Rate')]),
+          dps:number(r[idx('Distance/Stroke (GPS)')]), lat:number(r[idx('GPS Lat.')]), lon:number(r[idx('GPS Lon.')])
+        };
+        if(Number.isFinite(item.lat)&&Number.isFinite(item.lon)&&Number.isFinite(item.distance)) rows.push(item);
+      }
+      if(rows.length<2) throw new Error('The file has fewer than two valid GPS stroke records.');
+      rows.forEach((r,i)=>{ r.bearing=i?bearing(rows[i-1],r):NaN; r.turn=i>1?angleDelta(rows[i-1].bearing,r.bearing):0; r.interval=i?r.elapsed-rows[i-1].elapsed:0; });
+      rows.forEach((r,i)=>{ r.speed5=movingMean(rows,x=>x.speed,i); r.dps5=movingMean(rows,x=>x.dps,i); r.turn5=movingMean(rows,x=>Math.abs(x.turn),i); });
+      const base=rows.slice(0,Math.max(30,Math.floor(rows.length*.6)));
+      const robust = (key,val,lower=false) => { const values=base.map(key), med=median(values), mad=median(values.map(x=>Math.abs(x-med)))||.01; return lower?Math.max(0,(med-val)/(1.4826*mad)):Math.max(0,(val-med)/(1.4826*mad)); };
+      rows.forEach(r=>{ r.anomaly=robust(x=>x.speed5,r.speed5,true)+.8*robust(x=>x.dps5,r.dps5,true)+.65*robust(x=>x.turn5,r.turn5)+.35*Math.max(0,(r.interval-3)/2); });
+      const candidates=[];
+      [...rows].sort((a,b)=>b.anomaly-a.anomaly).forEach(r=>{ if(candidates.length<5 && r.stroke>5 && r.stroke<rows.length-4 && !candidates.some(c=>Math.abs(c.stroke-r.stroke)<12)) candidates.push(r); });
+      const lookup = label => { const row=table.find(r=>String(r[0]).trim()===label); return row ? String(row[1]||'').trim() : ''; };
+      const summaryAt=table.findIndex(r=>String(r[0]).trim()==='Session Summary:');
+      let summary={};
+      if(summaryAt>=0){ let hi=summaryAt+1; while(hi<table.length&&!table[hi].some(v=>String(v).trim()))hi++; const h=table[hi], v=table[hi+2]||[]; h.forEach((x,i)=>summary[String(x).trim()]=v[i]); }
+      return { rows, candidates, meta:{ name:lookup('Name:')||filename.replace(/\.csv$/i,''), start:lookup('Start Time:') }, summary };
+    }
+
+    function colorRamp(t) {
+      t=Math.max(0,Math.min(1,t));
+      const stops=[[40,120,184],[46,196,182],[244,211,94],[238,108,77]];
+      const p=t*(stops.length-1), i=Math.min(stops.length-2,Math.floor(p)), f=p-i;
+      const c=stops[i].map((v,k)=>Math.round(v+(stops[i+1][k]-v)*f)); return `rgb(${c.join(',')})`;
+    }
+    function colorInfo(mode) {
+      const def=metricDefs[mode], values=state.rows.map(def.value).filter(Number.isFinite), lo=quantile(values,.05), hi=quantile(values,.95);
+      return {def,lo,hi,value:r=>{let t=(def.value(r)-lo)/(hi-lo||1); if(def.reverse)t=1-t; return t;}};
+    }
+    function renderRoute() {
+      routeGroup.clearLayers(); state.routeLayers=[];
+      const mode=$('colorMode').value, info=colorInfo(mode), renderer=L.canvas({padding:.4});
+      for(let i=1;i<state.rows.length;i++){
+        const a=state.rows[i-1], b=state.rows[i];
+        const line=L.polyline([[a.lat,a.lon],[b.lat,b.lon]],{renderer,color:colorRamp(info.value(b)),weight:6,opacity:.92,lineCap:'round'}).addTo(routeGroup);
+        line.on('click',()=>selectStroke(i,true));
+        line.bindTooltip(()=>`${metricDefs[mode].label}: ${metricDefs[mode].format(metricDefs[mode].value(b))} ${metricDefs[mode].unit}<br>Stroke ${b.stroke} · ${Math.round(b.distance)} m`,{sticky:true});
+        state.routeLayers.push(line);
+      }
+      $('legend').hidden=false; $('legendLabel').textContent=info.def.label; $('legendUnit').textContent=info.def.unit;
+      $('legendMin').textContent=info.def.format(info.lo); $('legendMid').textContent=info.def.format((info.lo+info.hi)/2); $('legendMax').textContent=info.def.format(info.hi);
+      if(state.marker) state.marker.addTo(map);
+    }
+
+    function makeChart() {
+      if(state.chart) state.chart.destroy();
+      const focus=$('chartMetric').value;
+      const defs={
+        speed:{a:['Speed',r=>r.speed,'m/s'],b:['Stroke rate',r=>r.rate,'spm']}, split:{a:['Split',r=>r.split,'sec / 500 m'],b:['Stroke rate',r=>r.rate,'spm']},
+        dps:{a:['Meters / stroke',r=>r.dps,'m'],b:['Stroke rate',r=>r.rate,'spm']}, turn:{a:['Steering change',r=>Math.abs(r.turn),'°'],b:['Speed',r=>r.speed,'m/s']}
+      }[focus];
+      const cursorPlugin={id:'cursor',afterDatasetsDraw(chart){const x=chart.scales.x.getPixelForValue(state.rows[state.selected].distance),ctx=chart.ctx;ctx.save();ctx.strokeStyle='#eaf4f4';ctx.lineWidth=1;ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(x,chart.chartArea.top);ctx.lineTo(x,chart.chartArea.bottom);ctx.stroke();ctx.restore();}};
+      state.chart=new Chart($('chart'),{type:'line',data:{labels:state.rows.map(r=>r.distance),datasets:[
+        {label:defs.a[0],data:state.rows.map(r=>({x:r.distance,y:defs.a[1](r)})),borderColor:'#3be0c0',backgroundColor:'#3be0c0',borderWidth:2,pointRadius:0,tension:.18,yAxisID:'y'},
+        {label:defs.b[0],data:state.rows.map(r=>({x:r.distance,y:defs.b[1](r)})),borderColor:'#f7c65d',backgroundColor:'#f7c65d',borderWidth:1.5,pointRadius:0,tension:.18,yAxisID:'y1'}
+      ]},options:{responsive:true,maintainAspectRatio:false,animation:false,interaction:{mode:'index',intersect:false},
+        onClick:(e)=>{const distance=state.chart.scales.x.getValueForPixel(e.x);let best=0;for(let i=1;i<state.rows.length;i++)if(Math.abs(state.rows[i].distance-distance)<Math.abs(state.rows[best].distance-distance))best=i;selectStroke(best,true);},
+        plugins:{legend:{labels:{color:'#b6c8cb',boxWidth:18,boxHeight:2}},tooltip:{callbacks:{title:items=>`${Math.round(state.rows[items[0].dataIndex].distance)} m · stroke ${state.rows[items[0].dataIndex].stroke}`}}},
+        scales:{x:{type:'linear',min:state.rows[0].distance,max:state.rows[state.rows.length-1].distance,grid:{color:'#1e3941'},ticks:{color:'#8fa8ad',maxTicksLimit:6,callback:v=>`${Math.round(v)} m`}},
+        y:{position:'left',grid:{color:'#1e3941'},ticks:{color:'#3be0c0'},title:{display:true,text:defs.a[2],color:'#8fa8ad'}},
+        y1:{position:'right',grid:{drawOnChartArea:false},ticks:{color:'#f7c65d'},title:{display:true,text:defs.b[2],color:'#8fa8ad'}}}
+      },plugins:[cursorPlugin]});
+      $('chartTitle').textContent=`${defs.a[0]} and ${defs.b[0]}`;
+    }
+
+    function selectStroke(index, pan=false) {
+      if(!state.rows.length)return; state.selected=Math.max(0,Math.min(state.rows.length-1,index)); const r=state.rows[state.selected];
+      $('strokeSlider').value=state.selected;
+      if(!state.marker) state.marker=L.marker([r.lat,r.lon],{icon:markerIcon,zIndexOffset:1000}).addTo(map); else state.marker.setLatLng([r.lat,r.lon]);
+      state.marker.bindTooltip(`Stroke ${r.stroke} · ${Math.round(r.distance)} m`,{permanent:false,direction:'top'});
+      if(pan) map.panTo([r.lat,r.lon],{animate:true,duration:.35});
+      $('selectedReadout').textContent=`Stroke ${r.stroke} · ${Math.round(r.distance)} m · ${formatDuration(r.elapsed)}`;
+      $('dStroke').textContent=Number.isFinite(r.stroke)?r.stroke:'—'; $('dDistance').textContent=`${r.distance.toFixed(1)} m`; $('dElapsed').textContent=formatDuration(r.elapsed);
+      $('dSplit').textContent=formatSplit(r.split); $('dSpeed').textContent=`${r.speed.toFixed(2)} m/s`; $('dRate').textContent=`${r.rate.toFixed(1)} spm`;
+      $('dDps').textContent=`${r.dps.toFixed(1)} m`; $('dTurn').textContent=`${Math.abs(r.turn||0).toFixed(1)}°`;
+      const start=Math.max(0,state.selected-3), end=Math.min(state.rows.length,state.selected+4);
+      $('nearbyRows').innerHTML=state.rows.slice(start,end).map((x,j)=>`<tr class="${start+j===state.selected?'selected':''}" data-i="${start+j}"><td>${x.stroke}</td><td>${Math.round(x.distance)} m</td><td>${formatSplit(x.split)}</td><td>${x.rate.toFixed(1)}</td><td>${x.dps.toFixed(1)}</td></tr>`).join('');
+      $('nearbyRows').querySelectorAll('tr').forEach(tr=>tr.addEventListener('click',()=>selectStroke(Number(tr.dataset.i),true)));
+      if(state.chart) state.chart.draw();
+    }
+
+    function renderCandidates() {
+      $('candidateList').innerHTML=state.candidates.map((r,i)=>`<button class="candidate" type="button" data-stroke="${state.rows.indexOf(r)}"><span class="candidate-rank">${i+1}</span><span><strong>${Math.round(r.distance)} m · ${formatDuration(r.elapsed)}</strong><small>Stroke ${r.stroke}; ${Math.abs(r.turn).toFixed(1)}° heading change</small></span><span class="candidate-score">${r.anomaly.toFixed(1)}</span></button>`).join('')+'<div class="status">High scores flag abrupt changes. Bridge GPS interference, turns, traffic, and pauses can look like equipment incidents.</div>';
+      $('candidateList').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>selectStroke(Number(b.dataset.stroke),true)));
+    }
+
+    function loadText(text,filename='SpeedCoach session') {
+      try {
+        const parsed=extract(text,filename); Object.assign(state,parsed); state.selected=0;
+        $('emptyState').classList.add('hidden'); $('colorMode').disabled=false; $('chartMetric').disabled=false; $('fitBtn').disabled=false; $('strokeSlider').disabled=false; $('strokeSlider').max=state.rows.length-1;
+        state.bounds=L.latLngBounds(state.rows.map(r=>[r.lat,r.lon])); map.fitBounds(state.bounds,{padding:[28,28]});
+        const last=state.rows[state.rows.length-1], totalTime=last.elapsed, avgSpeed=last.distance/totalTime;
+        $('sessionName').textContent=state.meta.name; $('sessionMeta').textContent=[state.meta.start,`${state.rows.length} strokes`,filename].filter(Boolean).join(' · ');
+        $('statDistance').textContent=`${(last.distance/1000).toFixed(2)} km`; $('statElapsed').textContent=formatDuration(totalTime); $('statSplit').textContent=formatSplit(500/avgSpeed); $('statRate').textContent=`${mean(state.rows.map(r=>r.rate)).toFixed(1)} spm`;
+        renderRoute(); makeChart(); renderCandidates(); selectStroke(0); $('status').className='status'; $('status').textContent=`Loaded ${state.rows.length} valid per-stroke GPS records.`;
+      } catch(e) { $('status').className='status error'; $('status').textContent=e.message; }
+    }
+    function formatDuration(s){if(!Number.isFinite(s))return '—';const m=Math.floor(s/60),sec=s-m*60;return `${m}:${sec.toFixed(1).padStart(4,'0')}`;}
+    function formatSplit(s){if(!Number.isFinite(s)||s<=0)return '—';const rounded=Math.round(s),m=Math.floor(rounded/60),sec=rounded-m*60;return `${m}:${String(sec).padStart(2,'0')}`;}
+    function readFile(file){if(!file)return;const reader=new FileReader();reader.onload=()=>loadText(reader.result,file.name);reader.onerror=()=>{$('status').className='status error';$('status').textContent='The file could not be read.';};reader.readAsText(file);}
+
+    [$('fileInput'),$('emptyFileInput')].forEach(input=>input.addEventListener('change',e=>readFile(e.target.files[0])));
+    $('colorMode').addEventListener('change',renderRoute); $('chartMetric').addEventListener('change',makeChart); $('fitBtn').addEventListener('click',()=>state.bounds&&map.fitBounds(state.bounds,{padding:[28,28]}));
+    $('strokeSlider').addEventListener('input',e=>selectStroke(Number(e.target.value),false));
+    const drop=$('dropTarget'); ['dragenter','dragover'].forEach(name=>document.addEventListener(name,e=>{e.preventDefault();drop.classList.add('dragging');}));
+    ['dragleave','drop'].forEach(name=>document.addEventListener(name,e=>{e.preventDefault();drop.classList.remove('dragging');})); document.addEventListener('drop',e=>readFile(e.dataTransfer.files[0]));
+    window.addEventListener('resize',()=>map.invalidateSize());
+
+    const mc=document.modelContext;
+    if(mc?.registerTool){
+      const signal=new AbortController();
+      Promise.resolve(mc.registerTool({name:'select_speedcoach_stroke',title:'Select SpeedCoach stroke',description:'Select a visible stroke by stroke number in the currently loaded SpeedCoach session.',inputSchema:{type:'object',properties:{stroke:{type:'integer',minimum:1}},required:['stroke'],additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:false},execute({stroke}){const i=state.rows.findIndex(r=>r.stroke===stroke);if(i<0)throw new Error('Stroke is not present in the loaded session.');selectStroke(i,true);return{stroke,distance_m:state.rows[i].distance,elapsed_s:state.rows[i].elapsed};}},{signal:signal.signal})).catch(()=>{});
+    }
+  })();
+  </script>
+</body>
+</html>
